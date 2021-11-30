@@ -2,6 +2,7 @@ module RescaleTimeSeries
 
 export rescale
 
+using OrderedCollections
 using FFTW
 
 """
@@ -21,79 +22,82 @@ function denorm_ifft(v::AbstractVector)
 end
 
 """
-Return frequency pairs: freqs in f1 to be associated with all f2 frequencies.
+Return index of closest frequency.
 """
-function freq_pairs(ref_expanded::AbstractVector, ref_collapsed::AbstractVector) #length(f1) > length(f2)
-    f1 = rfftfreq(length(ref_expanded))
-    f2 = rfftfreq(length(ref_collapsed))
-    corr = Vector{Int64}(undef,length(f2))
-    for i in 1:length(f2)
-        corr[i] = findmin(abs.(f1 .- f2[i]))[2]
-    end
-    return corr
+function index_closest_freq(value::Number, freqs::AbstractVector)
+    findmin(abs.(freqs .- value))[2]
 end
 
 """
-Get n biggest values and associated frequency.
+Sort an unsorted Dict by magnitude of values.
 """
-function get_components(scaling::AbstractVector, ref_expanded::AbstractVector, ref_collapsed::AbstractVector; n=nothing)
-    # Default value for n such that all components are used
-    max_length = length(scaling)
-    if isnothing(n)
-        n = max_length
+function sort_magnitude(dict::AbstractDict{K,V}) where {K,V}
+    sorted = OrderedDict{K,V}()
+    while !isempty(dict)
+        for (k,v) in dict
+            if abs(v) == maximum(abs.(values(dict)))
+                sorted[k] = pop!(dict,k)
+            end
+        end
     end
-    # Test on maximum possible n value
-    if n > max_length
-        error("n must be <= $max_length")
+    return sorted
+end
+
+"""
+Return scaling for base -> target.
+Scaling is a Dict of frequencies => scaling factor. Frequencies belong to base.
+Dict is sorted by descending magnitude of scaling factor.
+"""
+function get_scaling(base::AbstractVector, target::AbstractVector)
+    fft_base = norm_fft(base)
+    freq_base = rfftfreq(length(base))
+    fft_target = norm_fft(target)
+    freq_target = rfftfreq(length(target))
+    unsorted_scaling = Dict{Number,Number}()
+    for i in 1:length(freq_base)
+        unsorted_scaling[freq_base[i]] = fft_target[index_closest_freq(freq_base[i], freq_target)] - fft_base[i]
     end
-    #
-    pairs = freq_pairs(ref_expanded, ref_collapsed)
-    # working on copies (which will be mutated)
-    v = copy(scaling)
-    # get n greatest components of norm
-    norm = abs.(v)
-    comp = Dict{Int64,ComplexF64}()
-    for i in 1:n
-        indmax = findmax(norm)[2]
-        deleteat!(norm,indmax)
-        comp[popat!(pairs,indmax)] = popat!(v,indmax)
+    sorted_scaling = sort_magnitude(unsorted_scaling)
+    return sorted_scaling
+end
+
+"""
+Apply scaling to base time series.
+The order can be up to the number of FFT frequencies.
+"""
+function apply_scaling(base::AbstractVector, scaling::AbstractDict; order = nothing)
+    freq_base = rfftfreq(length(base))
+    # If no order is defined, applying all scaling components
+    if isnothing(order)
+        order = length(scaling)
     end
-    return comp
+    fft_scaled = norm_fft(base)
+    components = collect(scaling)
+    i = 1
+    while !isempty(components) && i <= order
+        freq, factor = popfirst!(components)
+        fft_scaled[index_closest_freq(freq, freq_base)] += factor
+        i = i+1
+    end
+    scaled = denorm_ifft(fft_scaled)
+    return scaled
 end
 
 @doc """
-    rescale(ref_expanded::AbstractVector, ref_collapsed::AbstractVector, target_collapsed::AbstractVector; order = nothing)
-Adapt "collapsed" target time series to a higher temporal resolution ("expanded") using template "expanded" and "collapsed" time series.
-`ref_collapsed` and `target_collapsed` must have the same number of steps.
-The result is a time series with the same resolution as `ref_expanded`
+    rescale(target_collapsed, ref_expanded, ref_collapsed; order = nothing)
+Rescale a target collapsed time series.
 
 | Argument           | Description                                      | 
 |--------------------|:-------------------------------------------------| 
+| `target_collapsed` | Target vector (low resolution)                   | 
 | `ref_expanded`     | Template vector (high resolution)                | 
 | `ref_collapsed`    | Template vector (low resolution)                 | 
-| `target_collapsed` | Target vector (low resolution)                   | 
 | `order`            | Number of Fourier components transferred         | 
+
 """
-function rescale(ref_expanded::AbstractVector, ref_collapsed::AbstractVector, target_collapsed::AbstractVector; order = nothing)
-    if isnothing(order)
-        order = length(ref_collapsed)/2+1
-    end
-    # fft of input time series
-    fft_ref_expanded = norm_fft(ref_expanded)
-    fft_ref_collapsed = norm_fft(ref_collapsed)
-    fft_target_collapsed = norm_fft(target_collapsed)
-    # scaling evaluated on collapsed time series
-    scaling = fft_target_collapsed - fft_ref_collapsed
-    # scaling components retained for the transformation
-    scaling_comp = get_components(scaling, ref_expanded, ref_collapsed; n=order)
-    # initialization of scaled at reference
-    fft_scaled = copy(fft_ref_expanded)
-    # apply scaling components on corresponding frequencies of reference expanded time series
-    for (k,v) in scaling_comp
-        fft_scaled[k] = fft_ref_expanded[k] + v
-    end
-    # inverse fft to get scaled time series
-    scaled = denorm_ifft(fft_scaled)
+function rescale(target_collapsed, ref_expanded, ref_collapsed; order = nothing)
+    scaling = get_scaling(ref_collapsed, target_collapsed)
+    scaled = apply_scaling(ref_expanded, scaling; order=order)
     return scaled
 end
 
