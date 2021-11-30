@@ -1,0 +1,4 @@
+name = "RescaleTimeSeries"
+uuid = "83e3bd76-daf5-40b1-bd70-0477bea61f1c"
+authors = ["GKrivtchik <47811556+GKrivtchik@users.noreply.github.com>"]
+version = "0.1.0"
