@@ -32,14 +32,7 @@ end
 Sort an unsorted Dict by magnitude of values.
 """
 function sort_magnitude(dict::AbstractDict{K,V}) where {K,V}
-    sorted = OrderedDict{K,V}()
-    while !isempty(dict)
-        for (k,v) in dict
-            if abs(v) == maximum(abs.(values(dict)))
-                sorted[k] = pop!(dict,k)
-            end
-        end
-    end
+    sorted = OrderedDict{K,V}(sort(collect(dict); by = x->abs(x[2]), rev=true))
     return sorted
 end
 
@@ -54,7 +47,8 @@ function get_scaling(base::AbstractVector, target::AbstractVector)
     fft_target = norm_fft(target)
     freq_target = rfftfreq(length(target))
     unsorted_scaling = Dict{Number,Number}()
-    for i in 1:length(freq_base)
+    l = length(freq_base)
+    for i in 1:l
         unsorted_scaling[freq_base[i]] = fft_target[index_closest_freq(freq_base[i], freq_target)] - fft_base[i]
     end
     sorted_scaling = sort_magnitude(unsorted_scaling)
